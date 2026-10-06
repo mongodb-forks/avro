@@ -119,6 +119,10 @@ public:
     size_t byteCount() const final {
         return curLen_;
     }
+
+    size_t remaining() const final {
+        return size_ - curLen_;
+    }
 };
 
 class MemoryOutputStream final : public OutputStream {

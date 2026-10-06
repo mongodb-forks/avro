@@ -21,6 +21,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -74,6 +75,13 @@ public:
      * to be used unless, returned back using backup.
      */
     virtual size_t byteCount() const = 0;
+
+    /**
+     * Returns the number of bytes remaining to be read, or SIZE_MAX if unknown.
+     */
+    virtual size_t remaining() const {
+        return std::numeric_limits<size_t>::max();
+    }
 };
 
 typedef std::unique_ptr<InputStream> InputStreamPtr;
@@ -343,6 +351,23 @@ struct StreamReader {
      */
     bool hasMore() {
         return next_ != end_ || fill();
+    }
+
+    /**
+     * Returns buffered bytes plus the underlying stream's remaining count, or
+     * SIZE_MAX if unknown.
+     */
+    size_t remaining() const {
+        constexpr size_t kUnknown = std::numeric_limits<size_t>::max();
+        if (in_ == nullptr) {
+            return kUnknown;
+        }
+        size_t underlying = in_->remaining();
+        if (underlying == kUnknown) {
+            return kUnknown;
+        }
+        size_t buffered = (next_ != nullptr) ? static_cast<size_t>(end_ - next_) : 0;
+        return buffered + underlying;
     }
 
     /**

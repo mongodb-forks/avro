@@ -19,11 +19,21 @@
 #include "Decoder.hh"
 #include "Exception.hh"
 #include "Zigzag.hh"
+#include <algorithm>
+#include <limits>
 #include <memory>
 
 namespace avro {
 
 using std::make_shared;
+
+namespace {
+
+// Lower bound for the item-count check: arrays/maps of zero-byte elements (e.g.
+// "null") can legitimately declare more items than there are remaining bytes.
+constexpr size_t kMinItemCount = 1 << 20;
+
+}  // namespace
 
 class BinaryDecoder : public Decoder {
     StreamReader in_;
@@ -106,6 +116,12 @@ size_t BinaryDecoder::doDecodeLength() {
     if (len < 0) {
         throw Exception("Cannot have negative length: {}", len);
     }
+    // A string/bytes length cannot exceed the bytes left to read.
+    if (static_cast<size_t>(len) > in_.remaining()) {
+        throw Exception("Avro length {} exceeds remaining input size {}",
+                        len,
+                        in_.remaining());
+    }
     return len;
 }
 
@@ -161,16 +177,32 @@ size_t BinaryDecoder::arrayStart() {
 }
 
 size_t BinaryDecoder::doDecodeItemCount() {
+    // Capture remaining before consuming the count bytes.
+    const size_t remaining = in_.remaining();
     auto result = doDecodeLong();
+    size_t count;
     if (result < 0) {
-        doDecodeLong();
-        return static_cast<size_t>(-result);
+        // Negative count: abs(count) items preceded by a block size in bytes.
+        if (result == std::numeric_limits<int64_t>::min()) {
+            throw Exception("Invalid Avro item count: {}", result);
+        }
+        auto blockSize = doDecodeLong();
+        if (blockSize < 0) {
+            throw Exception("Cannot have negative block size: {}", blockSize);
+        }
+        count = static_cast<size_t>(-result);
+    } else {
+        count = static_cast<size_t>(result);
     }
-    return static_cast<size_t>(result);
+    if (count > std::max(remaining, kMinItemCount)) {
+        throw Exception("Avro item count {} exceeds remaining input size {}", count, remaining);
+    }
+    return count;
 }
 
 size_t BinaryDecoder::arrayNext() {
-    return static_cast<size_t>(doDecodeLong());
+    // Bounds the count and handles negative blocks, unlike a raw doDecodeLong().
+    return doDecodeItemCount();
 }
 
 size_t BinaryDecoder::skipArray() {
